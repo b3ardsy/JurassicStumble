@@ -179,3 +179,125 @@ Review the three representative assets in the Unreal viewport. If approved, auth
 
 Task 03D is complete. Remaining character animations, gameplay implementation, map work, and any visual remediation of source-geometry shading warnings require separate approval and are outside this task.
 
+## Task 04 — Player Controller and Basic Movement
+
+### Completed
+
+- Created `BP_Player` as a Character Blueprint using the existing `SK_Monster` skeletal mesh, with configured capsule, mesh transform, Spring Arm, Camera, and Character Movement values.
+- Created `IA_Move`, `IA_Look`, `IA_Jump`, and `IMC_Default`, including W/A/S/D, Mouse XY, and Space Bar mappings.
+- Implemented camera-relative movement, controller yaw/pitch look, jump start/release, and duplicate-safe mapping-context installation in the `BP_Player` Event Graph.
+- Created `GM_GameMode` from `GameModeBase`, set `BP_Player` as its Default Pawn Class, and configured it as the project-wide default Game Mode.
+- Kept the existing `/Game/JurassicStumble/Maps/Level1` unchanged. The project-wide Game Mode applies unless a per-level override is introduced.
+- Added `Documentation/PlayerSetup.md` and updated the project structure documentation.
+- Did not add animations, C++, plugins, unrelated gameplay systems, or commits.
+
+### Validation performed
+
+- Unreal Engine 5.8 commandlet validation loaded all six new assets and compiled both Blueprints successfully.
+- Verified the `BP_Player` component hierarchy and settings: `70 × 125 cm` capsule, mesh Z `-125`, `350 cm` Spring Arm, camera lag speed `12`, walk speed `500`, jump velocity `500`, gravity `1.0`, air control `0.35`, and yaw rotation rate `540`.
+- Verified all six Enhanced Input mappings and the movement-axis modifiers.
+- Verified the 23-node Event Graph contains Begin Play mapping setup, Move, Look, and Jump Started/Completed/Canceled flows.
+- Loaded `Level1`, confirmed one Player Start, and completed Map Check with zero errors and zero warnings.
+- Verified `GM_GameMode` uses `BP_Player` and `DefaultEngine.ini` configures `GM_GameMode` as `GlobalDefaultGameMode`.
+
+### Manual validation still required
+
+- PIE was not run because no usable interactive Unreal Editor control was available. The successful check was headless with NullRHI.
+- Open `Level1`, press Play, and verify WASD movement is relative to camera yaw, mouse movement orbits/looks correctly, Space jumps and releases correctly, and Escape returns control to the Editor.
+- Visually confirm `SK_Monster` faces the movement direction and its feet align with the floor. Adjust only the mesh-relative rotation/location if the rendered check exposes an issue.
+
+## Task 04B — WASD Movement and Third-Person Camera Correction
+
+### Diagnosis and correction
+
+- Inspected the existing input assets and `BP_Player` rather than recreating them.
+- Confirmed `IA_Move` was already `Axis2D` and the Event Graph correctly split Y into forward movement and X into right movement using controller-yaw-only direction vectors.
+- Found the saved `IMC_Default` mappings contained no modifiers. Consequently, W, A, S, and D all supplied the same default positive X contribution.
+- Corrected the existing mappings in place: W uses YXZ swizzle, S uses YXZ swizzle then Negate, D has no modifier, and A uses Negate. The resulting values are W `+Y`, S `-Y`, D `+X`, and A `-X`; opposite inputs cancel.
+- Preserved `Use Controller Rotation Yaw = false`, `Orient Rotation to Movement = true`, and yaw rotation rate `540`.
+- Stabilized the existing Spring Arm at `350 cm`: Pawn Control Rotation enabled, pitch/yaw inheritance enabled, roll inheritance disabled, collision enabled, position lag speed `12`, and rotation lag speed `10`. The Camera continues to leave Pawn Control Rotation disabled.
+- Did not add forced automatic recentering. The free-orbit camera and camera-relative movement share controller yaw; forced recentering could fight mouse input and change the movement basis continuously.
+- Did not modify KayKit assets, the character rig or mesh, level geometry, animations, physics, Git configuration, C++, or plugins.
+
+### Validation performed
+
+- Reopened the changed assets in a fresh Unreal Engine 5.8 commandlet process and verified all four movement modifier chains persisted.
+- Verified `BP_Player` retains its 23-node Event Graph, two `AddMovementInput` nodes, yaw-only forward/right vector nodes, mouse-look nodes, and Jump/Stop Jumping nodes.
+- Compiled `BP_Player` and `GM_GameMode` successfully.
+- Confirmed `GM_GameMode` still uses `BP_Player` as Default Pawn and `Level1` explicitly uses `GM_GameMode` in World Settings.
+- Loaded `Level1`, confirmed its Player Start remains present, and completed Map Check with zero errors and zero warnings.
+
+### Manual validation still required
+
+- Validation was headless with NullRHI; interactive PIE was unavailable.
+- In `Level1`, verify W/S/A/D produce four distinct directions, opposite keys cancel, movement remains camera-relative after orbiting, the Monster rotates smoothly toward movement, the camera remains stable, and jumping still works.
+- The camera intentionally preserves mouse-controlled free orbit and does not automatically snap behind the Monster. Evaluate optional delayed recentering only after this stable baseline is playtested.
+
+## Task 04D — Align Player Blueprints with Class Project
+
+### Completed
+
+- Renamed the existing mapping context from `IMC_Default` to `IMC_Player` through Unreal asset tools, preserved all six mappings and Task 04B modifiers, updated `BP_Player`, and removed the obsolete duplicate with the Content Browser. Only `IMC_Player` remains.
+- Rebuilt `BP_Player`'s Event Graph to match the class structure and organized it into **Input Initialization**, **Movement**, **Look**, and **Jumping** comments.
+- Input initialization is `BeginPlay` → `Get Controller` → `Cast To PlayerController` → `Get Enhanced Input Local Player Subsystem` → `Add Mapping Context (IMC_Player, priority 0)`.
+- Replaced the camera-relative vector calculation with actor-relative movement: `Get Actor Forward Vector` with Move Y, then `Get Actor Right Vector` with Move X, using two chained `Add Movement Input` nodes.
+- Matched the class Look execution order: Pitch from Y followed by Yaw from X.
+- Matched the class Jump structure: Started → `Jump`, Completed → one `Stop Jumping`; removed the redundant Canceled stop node.
+- Preserved the existing Spring Arm, Camera, movement physics, `GM_GameMode`, `Level1`, Player Start, and KayKit assets.
+- Preserved the manually corrected Monster transform: location `(0, 0, -125)`, rotation `(0, -90, 0)`, scale `(1, 1, 1)`.
+
+### Rotation decision
+
+- Actor-relative input with `Orient Rotation to Movement` enabled can feed rotation back into the same forward/right basis and cause continuous turning while strafing.
+- Task 04D therefore sets `Use Controller Rotation Yaw = true` and `Orient Rotation to Movement = false`. Mouse yaw turns the actor and behind-the-character camera together; the movement graph remains strictly actor-relative. Rotation Rate remains `540 degrees/second`.
+- This is an intentional stability difference from Task 04B and does not silently substitute camera-relative movement.
+
+### Validation performed
+
+- A fresh Unreal Engine 5.8 commandlet pass loaded `IMC_Player`, confirmed `IMC_Default` is absent, and verified all six mappings and modifier chains.
+- Compiled `BP_Player` and `GM_GameMode` without Blueprint errors.
+- Verified the final Event Graph contains 18 nodes, four comment sections, two actor-vector nodes, two movement nodes, the class Look order, and one Stop Jumping node. No controller-rotation movement-vector nodes remain.
+- Verified all movement physics and camera settings were preserved: walk `500`, jump `500`, gravity `1.0`, air control `0.35`, Spring Arm `350`, collision enabled, position lag `12`, and rotation lag `10`.
+- Verified `GM_GameMode` still defaults to `BP_Player`; `Level1` explicitly uses `GM_GameMode`, contains one Player Start, contains no placed `BP_Player`, and passes Map Check with zero errors and zero warnings.
+
+### Manual validation still required
+
+- Validation used NullRHI; interactive PIE was not performed.
+- In PIE, confirm W/S/A/D are actor-relative, opposite keys cancel, mouse yaw turns actor and camera without rotation feedback, mouse pitch works, Space press/release jumps correctly, `BP_Player` is possessed, and only one player pawn spawns.
+
+### Intentional classroom differences
+
+- The Jurassic Stumble Blueprint retains the KayKit Monster, Capsule, Character Movement, Spring Arm, and Camera; it does not add the classroom Cylinder, Cube, Sphere, or Sphere1 components.
+- No custom PlayerController, automatic camera recentering, animations, ragdoll, sprint, crouch, dive, C++, plugins, or additional gameplay frameworks were added.
+
+## Task 04E — Independent Camera and Rotation Fix
+
+### Completed
+
+- Disabled `Use Controller Rotation Yaw`, Pitch, and Roll on `BP_Player`. Mouse input now updates controller rotation for the Spring Arm without directly rotating the Monster.
+- Kept `Orient Rotation to Movement` disabled and added no automatic facing logic, avoiding actor-relative rotation feedback while preserving predictable strafing.
+- Preserved the actor-relative Movement graph and all WASD modifiers without modification.
+- Preserved the classroom Look execution chain while inserting a single Float Multiply on each axis between `Break Vector2D` and the controller-input nodes. Yaw and pitch sensitivity are both `0.5`; the mapping context contains no duplicate Look scaling.
+- Added standard PlayerCameraManager setup after input initialization: player index `0`, View Pitch Min `-60°`, and View Pitch Max `45°`. No custom PlayerController, custom PlayerCameraManager, or Tick clamp was required.
+- Preserved Spring Arm Pawn Control Rotation, pitch/yaw inheritance, disabled roll inheritance, `350 cm` arm length, camera collision, position/rotation lag, and the Camera's disabled Pawn Control Rotation.
+- Preserved the Monster transform `(0, 0, -125) / (0, -90, 0) / (1, 1, 1)`, all movement physics, Jump/Stop Jumping nodes, `GM_GameMode`, and `Level1`.
+
+### Validation performed
+
+- A fresh Unreal Engine 5.8 commandlet pass compiled `BP_Player` and `GM_GameMode` without errors.
+- Verified the saved graph contains 23 nodes and five comment sections, including the new Camera Pitch Limits section.
+- Verified all three pawn controller-rotation flags are false and Orient Rotation to Movement remains false.
+- Verified View Pitch Min/Max serialize as `-60°/+45°` and both Look multipliers serialize as `0.5`.
+- Verified all six Enhanced Input mappings, W/S swizzle, S/A negate modifiers, and unscaled Mouse2D mapping remain intact.
+- Verified the actor-relative forward/right movement nodes, two movement calls, Jump, and single Stop Jumping remain present.
+- Verified `GM_GameMode` continues to spawn `BP_Player`; `Level1` continues to use `GM_GameMode` and passes Map Check with zero errors and zero warnings.
+
+### Manual validation still required
+
+- Validation used NullRHI; interactive PIE was not performed.
+- In PIE, confirm mouse movement orbits only the camera, the Monster maintains its facing direction, right/left and up/down feel conventional, pitch stops at `-60°/+45°` without flipping, `0.5` sensitivity feels appropriate, and WASD/jumping remain functional.
+
+### Task boundary
+
+- No KayKit assets, animations, movement physics, Game Mode classes, levels, C++, plugins, Tick camera logic, automatic camera recentering, or unrelated gameplay systems were changed.
+

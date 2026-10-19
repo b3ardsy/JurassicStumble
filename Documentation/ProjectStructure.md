@@ -74,7 +74,7 @@ Empty folders may not appear in the Content Browser and are not retained by Git.
 | Obstacle | `BP_` | `BP_Obstacle_RotatingDisc` |
 | Checkpoint | `BP_` | `BP_Checkpoint` |
 | Input Action | `IA_` | `IA_Jump` |
-| Input Mapping Context | `IMC_` | `IMC_Default` |
+| Input Mapping Context | `IMC_` | `IMC_Player` |
 | Animation Blueprint | `ABP_` | `ABP_Player` |
 | Animation Sequence | `A_` | `A_DinoIdle` |
 | Skeletal Mesh | `SK_` | `SK_Dinosaur` |
@@ -102,5 +102,22 @@ For future KayKit imports, apply the same prefixes at import time: `SM_`, `SK_`,
 
 ## Prototype map
 
-The canonical prototype level is reserved as `/Game/JurassicStumble/Maps/L_Prototype`. It will be the Editor Startup Map and Game Default Map after it is created and validated in Unreal Editor. At present, creation and default-map assignment are pending because Unreal Editor automation was unavailable during Task 02.
+The current gameplay test level is `/Game/JurassicStumble/Maps/Level1`. It contains a Player Start and passes Unreal Map Check. The project-wide default Game Mode is `/Game/JurassicStumble/Blueprints/GameModes/GM_GameMode`, whose default pawn is `BP_Player`.
+
+Task 04 added these game-owned assets:
+
+```text
+Content/JurassicStumble/
+├── Blueprints/
+│   ├── Player/BP_Player
+│   └── GameModes/GM_GameMode
+└── Input/
+    ├── Actions/
+    │   ├── IA_Move
+    │   ├── IA_Look
+    │   └── IA_Jump
+    └── MappingContexts/IMC_Player
+```
+
+`BP_Player` uses the vendor-owned `/Game/ThirdParty/KayKit/Characters/Monster/SK_Monster` skeletal mesh. Character setup and input wiring are documented in `Documentation/PlayerSetup.md`.
 
