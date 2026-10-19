@@ -29,7 +29,9 @@ The KayKit content currently occupies:
 
 ```text
 Content/ThirdParty/KayKit/
-├── Characters/Monster/          # SK_Monster, SKEL_Monster, M_Monster, T_Monster_Atlas
+├── Characters/
+│   ├── Monster/                 # SK_Monster, SKEL_Monster, M_Monster, T_Monster_Atlas
+│   └── Rig_Medium/Animations/   # 132 A_ animation sequences in eight category folders
 ├── Platformer/
 │   ├── Meshes/                  # 525 SM_ static meshes
 │   ├── Materials/               # M_Platformer, M_Platformer_Threads
@@ -40,7 +42,7 @@ Content/ThirdParty/KayKit/
     └── Textures/                # T_ResourceBits_Atlas
 ```
 
-`Monster` is the intended playable character source. Its existing humanoid `Rig_Medium` skeleton is intentional; game-owned character Blueprints and animations remain separate from this vendor-source folder. The full environment source-to-asset mapping is maintained in `Documentation/KayKitAssetManifest.csv`.
+`Monster` is the intended playable character source. Its existing humanoid `Rig_Medium` skeleton is intentional. KayKit source animation sequences remain in the vendor folder and all reference the existing `SKEL_Monster`; future game-owned Animation Blueprints, Blend Spaces, Montages, and gameplay logic belong under `Content/JurassicStumble/Animations/Player`. The environment source-to-asset mapping is maintained in `Documentation/KayKitAssetManifest.csv`, and the animation import is documented in `Documentation/AnimationImport.md`.
 
 KayKit conversion work must use Unreal's supported FBX/texture import pipeline. Extracted source files and Unity metadata are working inputs only; do not place `.unitypackage`, `.prefab`, `.mat`, `.meta`, or Unity `.anim` files in the Unreal Content tree. Shared Unreal materials and textures should live once within the relevant pack folder and be reused by its meshes.
 
@@ -76,7 +78,7 @@ Empty folders may not appear in the Content Browser and are not retained by Git.
 | Input Action | `IA_` | `IA_Jump` |
 | Input Mapping Context | `IMC_` | `IMC_Player` |
 | Animation Blueprint | `ABP_` | `ABP_Player` |
-| Animation Sequence | `A_` | `A_DinoIdle` |
+| Animation Sequence | `A_` | `A_Walking_A` |
 | Skeletal Mesh | `SK_` | `SK_Dinosaur` |
 | Skeleton | `SKEL_` | `SKEL_Monster` |
 | Static Mesh | `SM_` | `SM_Platform` |

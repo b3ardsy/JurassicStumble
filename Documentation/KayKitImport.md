@@ -2,7 +2,7 @@
 
 ## Status
 
-Task 03D completed the approved environment import from the previously supplied KayKit Platformer and Resource Bits archives. The archives were not modified. Extraction and final-name staging were performed only under ignored `Intermediate/KayKitTask03/`.
+Task 03D completed the approved environment import from the previously supplied KayKit Platformer and Resource Bits archives. Task 05 subsequently imported the Mystery Series 4 `Rig_Medium` animation library for the existing Monster skeleton. The archives were not modified. Extraction and final-name staging were performed only under ignored `Intermediate/` working folders.
 
 The pre-import audit found exactly the four approved Monster assets under `/Game/ThirdParty/KayKit/Characters/Monster` and no existing Platformer or Resource Bits assets. Those four packages were hash-checked before and after the import and remained byte-for-byte unchanged.
 
@@ -60,4 +60,10 @@ Task 03D did not modify the approved representative character set:
 - `/Game/ThirdParty/KayKit/Characters/Monster/M_Monster`
 - `/Game/ThirdParty/KayKit/Characters/Monster/T_Monster_Atlas`
 
-`Monster` remains the intended playable-character source and continues to use its authored humanoid `Rig_Medium` hierarchy and skinning. Animation import remains outside Task 03D.
+`Monster` remains the intended playable-character source and continues to use its authored humanoid `Rig_Medium` hierarchy and skinning.
+
+## Rig_Medium animations
+
+Task 05 imported 132 distinct animation sequences to `/Game/ThirdParty/KayKit/Characters/Rig_Medium/Animations/`, organized into General, Movement Basic, Movement Advanced, Combat Melee, Combat Ranged, Simulation, Special, and Tools categories. All sequences use the existing `SKEL_Monster`; no replacement skeleton, skeletal mesh, material, texture, or Physics Asset was created.
+
+The import preserved source sampling and Unity loop metadata, retained one shared T-pose, and left root-motion enablement off because the source declares no root-motion bone. Detailed source reconciliation, category counts, settings, validation evidence, and manual visual checks are recorded in `Documentation/AnimationImport.md`.

@@ -376,3 +376,33 @@ Task 03D is complete. Remaining character animations, gameplay implementation, m
 
 - No movement graph, movement settings, input assets, KayKit assets, mesh transform, jumping, Game Mode, level geometry, C++, plugins, or unrelated systems were changed.
 
+## Task 05 — KayKit Rig_Medium Animation Asset Import
+
+### Source audit and import
+
+- Inspected only the supplied Mystery Series 4 Unity archive and left it unchanged.
+- Found 131 `Rig_Medium` Unity `.anim` assets and eight corresponding `Rig_Medium` FBXs containing 139 clip definitions. Reconciled these to 132 distinct FBX takes after deduplicating seven repeated T-pose definitions.
+- Identified one valid FBX-only General take, `PickUp`, and four experimental Unity filenames whose `EXPERIMENTAL_` prefix is not present in their matching FBX take names.
+- Imported 132 final `A_` Animation Sequences under `/Game/ThirdParty/KayKit/Characters/Rig_Medium/Animations/` in General, Movement Basic, Movement Advanced, Combat Melee, Combat Ranged, Simulation, Special, and Tools folders.
+- Assigned every sequence to the existing `/Game/ThirdParty/KayKit/Characters/Monster/SKEL_Monster` during animation-only import. No skeleton, mesh, Physics Asset, material, or texture was created.
+- Preserved source sample timing, copied Unity loop metadata to Unreal's Loop setting, retained one `A_T_Pose`, and left Enable Root Motion disabled because the source metadata declares no root-motion bone.
+- Created `Documentation/AnimationImport.md` with the source inventory, layout, import settings, validation evidence, limitations, and future manual check.
+
+### Validation performed
+
+- A fresh Unreal Engine 5.8 NullRHI commandlet loaded all 132 packages as `AnimSequence`, confirmed the shared `SKEL_Monster`, and reported zero validation errors.
+- Confirmed category counts of General `15`, Movement Basic `10`, Movement Advanced `12`, Combat Melee `21`, Combat Ranged `19`, Simulation `13`, Special `14`, and Tools `28`.
+- Confirmed all assets use `A_`, names are unique, all sequences contain sampled data, 61 are marked looping, and none has root motion enabled.
+- Representative durations and key counts were validated across locomotion, crouch, melee, ranged, idle, and tool-use clips.
+- Confirmed the Monster hierarchy exposes the expected normalized `Rig_Medium` bones and removed the temporary probe folder through Unreal asset management.
+- SHA-256 comparison confirmed `SK_Monster`, `SKEL_Monster`, `M_Monster`, `T_Monster_Atlas`, `BP_Player`, `GM_GameMode`, and `Level1` remained byte-for-byte unchanged.
+
+### Manual validation still required
+
+- Validation was headless with NullRHI, so rendered deformation, orientation, pose quality, foot sliding, and visual playback were not claimed.
+- Open representative sequences in Unreal's Animation Editor with `SK_Monster` as the preview mesh and visually spot-check idle, walking, jumping, melee, ranged, tool-use, special, and T-pose clips before gameplay integration.
+
+### Task boundary
+
+- No Animation Blueprint, Blend Space, State Machine, Montage, Control Rig, IK Rig, Retargeter, notify, gameplay integration, Blueprint, Game Mode, map, C++, plugin, Git configuration change, commit, or push was made.
+
