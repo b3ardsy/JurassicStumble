@@ -301,3 +301,78 @@ Task 03D is complete. Remaining character animations, gameplay implementation, m
 
 - No KayKit assets, animations, movement physics, Game Mode classes, levels, C++, plugins, Tick camera logic, automatic camera recentering, or unrelated gameplay systems were changed.
 
+## Task 04F — Camera-Relative Movement and Character Rotation
+
+### Completed
+
+- Replaced only the Movement section's `Get Actor Forward Vector` and `Get Actor Right Vector` calculations with camera-relative horizontal vectors.
+- The saved chain is Controller → Control Rotation → Break Rotator → Make Rotator from Yaw only → Forward/Right Vector. Pitch and Roll are excluded from movement.
+- Preserved `IA_Move`, `Break Vector2D`, both existing `Add Movement Input` nodes, their execution chain, Y-to-forward/X-to-right scale wiring, and every Enhanced Input modifier.
+- Enabled Character Movement's built-in `Orient Rotation to Movement`, kept `Use Controller Desired Rotation` disabled, and preserved yaw Rotation Rate `540 degrees/second`.
+- Kept Controller Rotation Yaw, Pitch, and Roll disabled, so orbiting the camera while stationary does not directly rotate the Monster.
+- Added no manual actor rotation, interpolation, Tick logic, custom movement framework, automatic recentering, C++, or plugins.
+
+### Preserved from Task 04E
+
+- Spring Arm controller rotation, pitch/yaw inheritance, disabled roll inheritance, collision testing, arm length `350`, and existing lag settings.
+- Camera Pawn Control Rotation disabled.
+- PlayerCameraManager pitch limits `-60°/+45°`.
+- Look yaw and pitch multipliers `0.5`, applied only in `BP_Player`.
+- Jump/Stop Jumping graph, movement physics, Monster transform `(0, 0, -125) / (0, -90, 0) / (1, 1, 1)`, `IMC_Player`, `GM_GameMode`, and `Level1`.
+
+### Validation performed
+
+- A fresh Unreal Engine 5.8 commandlet pass compiled `BP_Player` and `GM_GameMode` without errors.
+- Verified the 27-node graph contains the controller yaw-only movement chain, two movement input nodes, and no Actor Forward/Right movement nodes.
+- Verified Orient Rotation to Movement is enabled, Use Controller Desired Rotation is disabled, all pawn controller-rotation flags are disabled, and yaw Rotation Rate is `540`.
+- Verified all six input mappings and WASD modifiers remain unchanged.
+- Verified the independent camera configuration, pitch limits, `0.5` sensitivities, Jump graph, movement physics, mesh transform, and Game Mode assignment remain unchanged.
+- Loaded `Level1` and completed Map Check with zero errors and zero warnings.
+
+### Manual validation still required
+
+- Validation used NullRHI; interactive PIE was not performed.
+- In PIE, confirm W/S/A/D and all four diagonals move relative to camera yaw, the Monster turns smoothly toward every movement direction, mouse-only orbit never rotates the stationary Monster, pitch/sensitivity remain correct, and jumping still works.
+
+### Difference from classroom graph
+
+- Task 04D's classroom-aligned actor-relative vector nodes were intentionally replaced by controller-yaw forward/right vectors to reproduce the Wildrune-style conventional third-person movement requested in Task 04F. Blueprint naming and comment organization remain intact.
+
+## Task 04G — Camera Orbit Diagnosis and Fine-Tuning
+
+### Diagnosis
+
+- Confirmed `IA_Look` is Axis2D with exactly one Mouse2D mapping, no mapping modifiers or triggers, and exactly one Look input event.
+- Confirmed the Blueprint axis routing was already correct: X → yaw only and Y → pitch only, through one sensitivity multiplier per axis. No input reaches roll and no sensitivity was applied twice.
+- Confirmed all pawn controller-rotation flags were disabled, the Spring Arm used controller pitch/yaw without roll inheritance, and the Camera did not independently use Pawn Control Rotation.
+- Found the likely cause of the unnatural orbit: the Camera was parented to the Spring Arm but had no socket, relative location approximately `(-181.9, 0, 289.7)`, and relative pitch `-20°`. That manual offset compounded the boom's orbit and could make horizontal rotation appear to introduce vertical drift.
+
+### Completed
+
+- Attached the existing Camera to the existing Spring Arm's `SpringEndpoint` socket through Unreal's supported component attachment operation.
+- Reset only the Camera relative transform to location `(0, 0, 0)`, rotation `(0, 0, 0)`, and scale `(1, 1, 1)`.
+- Preserved Spring Arm length `350`, Pawn Control Rotation, pitch/yaw inheritance, disabled roll inheritance, collision testing, and existing lag settings.
+- Changed the single Blueprint Look multipliers to yaw `0.35` and pitch `0.25`. `IMC_Player` remains unscaled.
+- Tightened the existing standard PlayerCameraManager clamp to View Pitch Min `-35°` and View Pitch Max `25°`.
+- Added no new camera component, framework, plugin, C++, Tick clamp, roll input, or automatic recentering.
+
+### Validation performed
+
+- A fresh Unreal Engine 5.8 commandlet pass compiled `BP_Player` and `GM_GameMode` without errors.
+- Verified one Axis2D Look action, one Mouse2D mapping, one Look event, no Look mapping modifiers, and no duplicate sensitivity.
+- Verified X connects only to `Add Controller Yaw Input` at `0.35`; Y connects only to `Add Controller Pitch Input` at `0.25`.
+- Verified pitch limits serialize as `-35°/+25°`.
+- Verified the Camera serializes on `SpringEndpoint` with zero relative location/rotation and no roll; the Spring Arm hierarchy, inheritance, collision, and `350` arm length remain correct.
+- Verified Task 04F camera-relative movement, Orient Rotation to Movement, yaw rate `540`, Jump graph, Monster transform, `GM_GameMode`, and `Level1` remain intact.
+- Loaded `Level1` and completed Map Check with zero errors and zero warnings.
+
+### Manual validation still required
+
+- Validation used NullRHI; interactive PIE and isolated runtime control-rotation logging were unavailable.
+- In PIE, test horizontal-only mouse motion and confirm yaw changes without pitch/roll or apparent height drift. Test vertical-only motion and confirm pitch changes without yaw/roll, stops at `-35°/+25°`, and cannot flip.
+- Confirm the new socket-based framing feels natural, camera collision still shortens the boom near geometry, and Task 04F movement/facing plus jumping remain functional.
+
+### Task boundary
+
+- No movement graph, movement settings, input assets, KayKit assets, mesh transform, jumping, Game Mode, level geometry, C++, plugins, or unrelated systems were changed.
+
