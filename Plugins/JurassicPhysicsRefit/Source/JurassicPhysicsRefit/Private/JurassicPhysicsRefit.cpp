@@ -60,6 +60,73 @@ namespace JurassicPhysicsRefit
 		return true;
 	}
 
+	const TCHAR* AngularMotionText(EAngularConstraintMotion Motion)
+	{
+		switch(Motion) { case ACM_Free:return TEXT("Free"); case ACM_Limited:return TEXT("Limited"); case ACM_Locked:return TEXT("Locked"); default:return TEXT("Unknown"); }
+	}
+
+	const TCHAR* LinearMotionText(ELinearConstraintMotion Motion)
+	{
+		switch(Motion) { case LCM_Free:return TEXT("Free"); case LCM_Limited:return TEXT("Limited"); case LCM_Locked:return TEXT("Locked"); default:return TEXT("Unknown"); }
+	}
+
+	FString TransformText(const FTransform& T)
+	{
+		return FString::Printf(TEXT("P=%s R=%s S=%s"),*T.GetTranslation().ToString(),*T.Rotator().ToString(),*T.GetScale3D().ToString());
+	}
+
+	FString AxesText(const FTransform& T)
+	{
+		return FString::Printf(TEXT("TwistX=%s Swing2Y=%s Swing1Z=%s"),*T.GetUnitAxis(EAxis::X).ToString(),*T.GetUnitAxis(EAxis::Y).ToString(),*T.GetUnitAxis(EAxis::Z).ToString());
+	}
+
+	FName FirstDirectChild(const FReferenceSkeleton& Ref, int32 ParentIndex)
+	{
+		for(int32 I=0;I<Ref.GetNum();++I) if(Ref.GetParentIndex(I)==ParentIndex) return Ref.GetBoneName(I);
+		return NAME_None;
+	}
+
+	void LogDrive(const TCHAR* Label,const FConstraintDrive& D)
+	{
+		UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT DRIVE %s position=%s velocity=%s stiffness=%.6f damping=%.6f maxForce=%.6f"),Label,D.bEnablePositionDrive?TEXT("true"):TEXT("false"),D.bEnableVelocityDrive?TEXT("true"):TEXT("false"),D.Stiffness,D.Damping,D.MaxForce);
+	}
+
+	bool AuditAllConstraints(UPhysicsAsset* Asset, USkeletalMesh* Mesh)
+	{
+		if(!Asset||!Mesh||Asset->ConstraintSetup.Num()!=11||Asset->SkeletalBodySetups.Num()!=12) return false;
+		const bool WasDirty=Asset->GetOutermost()->IsDirty();
+		const FReferenceSkeleton& Ref=Mesh->GetRefSkeleton();
+		const TArray<FTransform> Component=ComponentRefTransforms(Mesh);
+		UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT AUDIT BEGIN asset=%s bodies=%d constraints=%d packageDirtyBefore=%s axisConvention=Twist:X,Swing1:Z,Swing2:Y"),*Asset->GetPathName(),Asset->SkeletalBodySetups.Num(),Asset->ConstraintSetup.Num(),WasDirty?TEXT("true"):TEXT("false"));
+		for(int32 I=0;I<Asset->ConstraintSetup.Num();++I)
+		{
+			const UPhysicsConstraintTemplate* Template=Asset->ConstraintSetup[I]; if(!Template) return false;
+			const FConstraintInstance& C=Template->DefaultInstance;
+			const int32 ChildIndex=Ref.FindBoneIndex(C.ConstraintBone1),ParentIndex=Ref.FindBoneIndex(C.ConstraintBone2);
+			if(!Component.IsValidIndex(ChildIndex)||!Component.IsValidIndex(ParentIndex)) return false;
+			const FTransform ChildLocal=C.GetRefFrame(EConstraintFrame::Frame1),ParentLocal=C.GetRefFrame(EConstraintFrame::Frame2);
+			const FTransform ChildFrame=ChildLocal*Component[ChildIndex],ParentFrame=ParentLocal*Component[ParentIndex];
+			const FVector AnchorDelta=ChildFrame.GetTranslation()-ParentFrame.GetTranslation();
+			const FVector Proximal=(Component[ChildIndex].GetTranslation()-Component[ParentIndex].GetTranslation()).GetSafeNormal();
+			const FName DistalName=FirstDirectChild(Ref,ChildIndex); const int32 DistalIndex=Ref.FindBoneIndex(DistalName);
+			const FVector Distal=Component.IsValidIndex(DistalIndex)?(Component[DistalIndex].GetTranslation()-Component[ChildIndex].GetTranslation()).GetSafeNormal():FVector::ZeroVector;
+			const FVector X=ChildFrame.GetUnitAxis(EAxis::X),Y=ChildFrame.GetUnitAxis(EAxis::Y),Z=ChildFrame.GetUnitAxis(EAxis::Z);
+			const FConstraintProfileProperties& P=C.ProfileInstance;
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] name=%s child=%s parent=%s distalChild=%s"),I,*C.JointName.ToString(),*C.ConstraintBone1.ToString(),*C.ConstraintBone2.ToString(),*DistalName.ToString());
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] childRefLocal {%s} parentRefLocal {%s}"),I,*TransformText(ChildLocal),*TransformText(ParentLocal));
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] childFrameCS {%s %s} parentFrameCS {%s %s} anchorDeltaCm=%s"),I,*TransformText(ChildFrame),*AxesText(ChildFrame),*TransformText(ParentFrame),*AxesText(ParentFrame),*AnchorDelta.ToString());
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] anatomy parentPos=%s childPos=%s distalPos=%s proximalDir=%s distalDir=%s absDotProx[X,Y,Z]=[%.6f,%.6f,%.6f] absDotDistal[X,Y,Z]=[%.6f,%.6f,%.6f]"),I,*Component[ParentIndex].GetTranslation().ToString(),*Component[ChildIndex].GetTranslation().ToString(),Component.IsValidIndex(DistalIndex)?*Component[DistalIndex].GetTranslation().ToString():TEXT("none"),*Proximal.ToString(),*Distal.ToString(),FMath::Abs(X|Proximal),FMath::Abs(Y|Proximal),FMath::Abs(Z|Proximal),FMath::Abs(X|Distal),FMath::Abs(Y|Distal),FMath::Abs(Z|Distal));
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] angular Twist=%s %.3fdeg Swing1=%s %.3fdeg Swing2=%s %.3fdeg softTwist=%s softSwing=%s twistSoft[k=%.3f d=%.3f r=%.3f] swingSoft[k=%.3f d=%.3f r=%.3f]"),I,AngularMotionText(P.TwistLimit.TwistMotion),P.TwistLimit.TwistLimitDegrees,AngularMotionText(P.ConeLimit.Swing1Motion),P.ConeLimit.Swing1LimitDegrees,AngularMotionText(P.ConeLimit.Swing2Motion),P.ConeLimit.Swing2LimitDegrees,P.TwistLimit.bSoftConstraint?TEXT("true"):TEXT("false"),P.ConeLimit.bSoftConstraint?TEXT("true"):TEXT("false"),P.TwistLimit.Stiffness,P.TwistLimit.Damping,P.TwistLimit.Restitution,P.ConeLimit.Stiffness,P.ConeLimit.Damping,P.ConeLimit.Restitution);
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] linear X=%s Y=%s Z=%s limit=%.3f soft=%s k=%.3f d=%.3f r=%.3f collisionDisabled=%s projection=%s [linearTol=%.3f angularTol=%.3f linearAlpha=%.3f angularAlpha=%.3f] shock=%s alpha=%.3f massConditioning=%s parentDominates=%s breakable[L=%s A=%s]"),I,LinearMotionText(P.LinearLimit.XMotion),LinearMotionText(P.LinearLimit.YMotion),LinearMotionText(P.LinearLimit.ZMotion),P.LinearLimit.Limit,P.LinearLimit.bSoftConstraint?TEXT("true"):TEXT("false"),P.LinearLimit.Stiffness,P.LinearLimit.Damping,P.LinearLimit.Restitution,P.bDisableCollision?TEXT("true"):TEXT("false"),P.bEnableProjection?TEXT("true"):TEXT("false"),P.ProjectionLinearTolerance,P.ProjectionAngularTolerance,P.ProjectionLinearAlpha,P.ProjectionAngularAlpha,P.bEnableShockPropagation?TEXT("true"):TEXT("false"),P.ShockPropagationAlpha,P.bEnableMassConditioning?TEXT("true"):TEXT("false"),P.bParentDominates?TEXT("true"):TEXT("false"),P.bLinearBreakable?TEXT("true"):TEXT("false"),P.bAngularBreakable?TEXT("true"):TEXT("false"));
+			UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT[%d] angularDrive mode=%d acceleration=%s targetR=%s targetVel=%s limitResponse=%d"),I,(int32)P.AngularDrive.AngularDriveMode,P.AngularDrive.bAccelerationMode?TEXT("true"):TEXT("false"),*P.AngularDrive.OrientationTarget.ToString(),*P.AngularDrive.AngularVelocityTarget.ToString(),(int32)P.AngularDrive.LimitViolationResponse);
+			LogDrive(*FString::Printf(TEXT("joint[%d].twist"),I),P.AngularDrive.TwistDrive); LogDrive(*FString::Printf(TEXT("joint[%d].swing"),I),P.AngularDrive.SwingDrive); LogDrive(*FString::Printf(TEXT("joint[%d].slerp"),I),P.AngularDrive.SlerpDrive);
+		}
+		const bool IsDirtyAfter=Asset->GetOutermost()->IsDirty();
+		UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit JOINT AUDIT PASS constraints=11 packageDirtyBefore=%s packageDirtyAfter=%s"),WasDirty?TEXT("true"):TEXT("false"),IsDirtyAfter?TEXT("true"):TEXT("false"));
+		return WasDirty==IsDirtyAfter;
+	}
+
+
 	int32 FindConstraint(const UPhysicsAsset* Asset, FName Child, FName Parent)
 	{
 		for(int32 I=0;I<Asset->ConstraintSetup.Num();++I)
@@ -608,10 +675,11 @@ void FJurassicPhysicsRefitModule::StartupModule()
 	PlanTorsoRefitCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.PlanTorsoRefit"),TEXT("Build and validate a transient spine/chest proposal."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::PlanTorsoRefit));
 	AnalyzeMassBalanceCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AnalyzeMassBalance"),TEXT("Read-only calculated/runtime mass and target-distribution diagnostic."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AnalyzeMassBalance));
 	ValidateMassBalanceCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.ValidateMassBalance"),TEXT("Validate serialized mass-only candidate and runtime distribution."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::ValidateMassBalance));
+	AuditConstraintsCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AuditConstraints"),TEXT("Read-only component-space constraint-frame and settings audit."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AuditConstraints));
 	CleanupCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.Cleanup"),TEXT("Delete the experimental destination through the editor asset subsystem."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::Cleanup));
 }
 
-void FJurassicPhysicsRefitModule::ShutdownModule() { CleanupCommand.Reset(); ValidateMassBalanceCommand.Reset(); AnalyzeMassBalanceCommand.Reset(); PlanTorsoRefitCommand.Reset(); AnalyzeTorsoCommand.Reset(); PlanHipsRefitCommand.Reset(); AnalyzeHipsCommand.Reset(); Create12BodyLowerLegFitCommand.Reset(); Create9BodyCommand.Reset(); ExecuteCommand.Reset(); AnalyzeCommand.Reset(); }
+void FJurassicPhysicsRefitModule::ShutdownModule() { CleanupCommand.Reset(); AuditConstraintsCommand.Reset(); ValidateMassBalanceCommand.Reset(); AnalyzeMassBalanceCommand.Reset(); PlanTorsoRefitCommand.Reset(); AnalyzeTorsoCommand.Reset(); PlanHipsRefitCommand.Reset(); AnalyzeHipsCommand.Reset(); Create12BodyLowerLegFitCommand.Reset(); Create9BodyCommand.Reset(); ExecuteCommand.Reset(); AnalyzeCommand.Reset(); }
 
 void FJurassicPhysicsRefitModule::Analyze()
 {
@@ -711,6 +779,13 @@ void FJurassicPhysicsRefitModule::ValidateMassBalance()
 	if(Valid)for(const TObjectPtr<USkeletalBodySetup>& C:Candidate->SkeletalBodySetups){const int32 I=Source->FindBodyIndex(C->BoneName);if(I==INDEX_NONE){Valid=false;break;}const USkeletalBodySetup* S=Source->SkeletalBodySetups[I];Valid&=SameGeometry(C->AggGeom,S->AggGeom);FBodyInstance A=C->DefaultInstance,B=S->DefaultInstance;B.MassScale=A.MassScale;Valid&=FBodyInstance::StaticStruct()->CompareScriptStruct(&A,&B,0);}
 	if(Valid)for(int32 I=0;I<11;++I)Valid&=FConstraintInstance::StaticStruct()->CompareScriptStruct(&Candidate->ConstraintSetup[I]->DefaultInstance,&Source->ConstraintSetup[I]->DefaultInstance,0);
 	if(!Valid){UE_LOG(LogTemp,Error,TEXT("JurassicPhysicsRefit MASS VALIDATION FAIL: candidate structure or non-mass properties differ."));return;}UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit MASS STRUCTURE VALID: bodies=12 constraints=11 geometryExact=true framesExact=true nonMassBodyPropertiesExact=true"));AnalyzeMassDistribution(Candidate,Mesh);
+}
+
+void FJurassicPhysicsRefitModule::AuditConstraints()
+{
+	using namespace JurassicPhysicsRefit;
+	UPhysicsAsset* Asset=LoadObject<UPhysicsAsset>(nullptr,MassBalanceObjectPath); USkeletalMesh* Mesh=LoadObject<USkeletalMesh>(nullptr,MeshPath);
+	if(!AuditAllConstraints(Asset,Mesh)) UE_LOG(LogTemp,Error,TEXT("JurassicPhysicsRefit JOINT AUDIT FAIL: invalid structure, transform, or dirty-state change."));
 }
 
 void FJurassicPhysicsRefitModule::Cleanup()

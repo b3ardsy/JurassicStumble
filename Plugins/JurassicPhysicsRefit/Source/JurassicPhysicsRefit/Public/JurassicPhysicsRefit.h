@@ -23,6 +23,7 @@ private:
 	void PlanTorsoRefit();
 	void AnalyzeMassBalance();
 	void ValidateMassBalance();
+	void AuditConstraints();
 	void Cleanup();
 	TUniquePtr<class FAutoConsoleCommand> AnalyzeCommand;
 	TUniquePtr<class FAutoConsoleCommand> ExecuteCommand;
@@ -34,5 +35,6 @@ private:
 	TUniquePtr<class FAutoConsoleCommand> PlanTorsoRefitCommand;
 	TUniquePtr<class FAutoConsoleCommand> AnalyzeMassBalanceCommand;
 	TUniquePtr<class FAutoConsoleCommand> ValidateMassBalanceCommand;
+	TUniquePtr<class FAutoConsoleCommand> AuditConstraintsCommand;
 	TUniquePtr<class FAutoConsoleCommand> CleanupCommand;
 };
