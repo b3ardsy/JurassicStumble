@@ -24,6 +24,11 @@ private:
 	void AnalyzeMassBalance();
 	void ValidateMassBalance();
 	void AuditConstraints();
+	void CreateElbowRelaxedDrive();
+	void CreateTunedPassive();
+	void AuditTunedPassive();
+	void CreateRuntimeFixedPassive();
+	void AuditRuntimeFixedPassive();
 	void Cleanup();
 	TUniquePtr<class FAutoConsoleCommand> AnalyzeCommand;
 	TUniquePtr<class FAutoConsoleCommand> ExecuteCommand;
@@ -36,5 +41,10 @@ private:
 	TUniquePtr<class FAutoConsoleCommand> AnalyzeMassBalanceCommand;
 	TUniquePtr<class FAutoConsoleCommand> ValidateMassBalanceCommand;
 	TUniquePtr<class FAutoConsoleCommand> AuditConstraintsCommand;
+	TUniquePtr<class FAutoConsoleCommand> CreateElbowRelaxedDriveCommand;
+	TUniquePtr<class FAutoConsoleCommand> CreateTunedPassiveCommand;
+	TUniquePtr<class FAutoConsoleCommand> AuditTunedPassiveCommand;
+	TUniquePtr<class FAutoConsoleCommand> CreateRuntimeFixedPassiveCommand;
+	TUniquePtr<class FAutoConsoleCommand> AuditRuntimeFixedPassiveCommand;
 	TUniquePtr<class FAutoConsoleCommand> CleanupCommand;
 };

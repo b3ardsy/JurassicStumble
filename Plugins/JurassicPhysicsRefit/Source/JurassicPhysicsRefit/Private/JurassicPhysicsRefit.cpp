@@ -20,6 +20,7 @@
 #include "Rendering/SkinWeightVertexBuffer.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 #include "UObject/SavePackage.h"
 #include "Editor.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -41,6 +42,16 @@ namespace JurassicPhysicsRefit
 	constexpr TCHAR LowerLegFitName[] = TEXT("PA_Monster_12BodyFitTest");
 	constexpr TCHAR MassBalancePackage[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_MassBalanceTest");
 	constexpr TCHAR MassBalanceObjectPath[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_MassBalanceTest.PA_Monster_MassBalanceTest");
+	constexpr TCHAR HipConstraintObjectPath[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_HipConstraintTest.PA_Monster_HipConstraintTest");
+	constexpr TCHAR ElbowRelaxedPackage[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_ElbowRelaxedDriveTest");
+	constexpr TCHAR ElbowRelaxedObjectPath[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_ElbowRelaxedDriveTest.PA_Monster_ElbowRelaxedDriveTest");
+	constexpr TCHAR ElbowRelaxedName[] = TEXT("PA_Monster_ElbowRelaxedDriveTest");
+	constexpr TCHAR TunedPassivePackage[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_TunedPassive");
+	constexpr TCHAR TunedPassiveObjectPath[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_TunedPassive.PA_Monster_TunedPassive");
+	constexpr TCHAR TunedPassiveName[] = TEXT("PA_Monster_TunedPassive");
+	constexpr TCHAR RuntimeFixedPackage[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_TunedPassive_RuntimeFixed");
+	constexpr TCHAR RuntimeFixedObjectPath[] = TEXT("/Game/JurassicStumble/Physics/PA_Monster_TunedPassive_RuntimeFixed.PA_Monster_TunedPassive_RuntimeFixed");
+	constexpr TCHAR RuntimeFixedName[] = TEXT("PA_Monster_TunedPassive_RuntimeFixed");
 
 	const TArray<FName>& NineBodyBones()
 	{
@@ -135,6 +146,254 @@ namespace JurassicPhysicsRefit
 			if(C.ConstraintBone1==Child && C.ConstraintBone2==Parent) return I;
 		}
 		return INDEX_NONE;
+	}
+
+	struct FApprovedConstraintLimit
+	{
+		FName Child;
+		FName Parent;
+		float Twist;
+		float Swing1;
+		float Swing2;
+	};
+
+	const TArray<FApprovedConstraintLimit>& ApprovedConstraintLimits()
+	{
+		static const TArray<FApprovedConstraintLimit> Limits = {
+			{TEXT("spine"), TEXT("hips"), 25, 20, 20},
+			{TEXT("chest"), TEXT("spine"), 25, 20, 20},
+			{TEXT("upperarm_l"), TEXT("chest"), 55, 50, 25},
+			{TEXT("lowerarm_l"), TEXT("upperarm_l"), 55, 10, 12},
+			{TEXT("upperarm_r"), TEXT("chest"), 55, 50, 25},
+			{TEXT("lowerarm_r"), TEXT("upperarm_r"), 55, 10, 12},
+			{TEXT("head"), TEXT("chest"), 25, 20, 30},
+			{TEXT("upperleg_l"), TEXT("hips"), 50, 35, 20},
+			{TEXT("lowerleg_l"), TEXT("upperleg_l"), 55, 8, 10},
+			{TEXT("upperleg_r"), TEXT("hips"), 50, 35, 20},
+			{TEXT("lowerleg_r"), TEXT("upperleg_r"), 55, 8, 10}
+		};
+		return Limits;
+	}
+
+	bool IsElbowConstraint(const FConstraintInstance& Constraint)
+	{
+		return (Constraint.ConstraintBone1 == TEXT("lowerarm_l") && Constraint.ConstraintBone2 == TEXT("upperarm_l")) ||
+			(Constraint.ConstraintBone1 == TEXT("lowerarm_r") && Constraint.ConstraintBone2 == TEXT("upperarm_r"));
+	}
+
+	bool HasApprovedLimits(const UPhysicsAsset* Asset)
+	{
+		if (!Asset || Asset->ConstraintSetup.Num() != ApprovedConstraintLimits().Num()) return false;
+		for (const FApprovedConstraintLimit& Limit : ApprovedConstraintLimits())
+		{
+			const int32 Index = FindConstraint(Asset, Limit.Child, Limit.Parent);
+			if (Index == INDEX_NONE || !Asset->ConstraintSetup[Index]) return false;
+			const FConstraintProfileProperties& Profile = Asset->ConstraintSetup[Index]->DefaultInstance.ProfileInstance;
+			if (Profile.TwistLimit.TwistMotion != ACM_Limited || Profile.ConeLimit.Swing1Motion != ACM_Limited || Profile.ConeLimit.Swing2Motion != ACM_Limited ||
+				!FMath::IsNearlyEqual(Profile.TwistLimit.TwistLimitDegrees, Limit.Twist) ||
+				!FMath::IsNearlyEqual(Profile.ConeLimit.Swing1LimitDegrees, Limit.Swing1) ||
+				!FMath::IsNearlyEqual(Profile.ConeLimit.Swing2LimitDegrees, Limit.Swing2)) return false;
+		}
+		return true;
+	}
+
+	bool RestoreApprovedLimitsAndSyncProfiles(UPhysicsAsset* Asset)
+	{
+		if (!Asset) return false;
+		for (const FApprovedConstraintLimit& Limit : ApprovedConstraintLimits())
+		{
+			const int32 Index = FindConstraint(Asset, Limit.Child, Limit.Parent);
+			if (Index == INDEX_NONE || !Asset->ConstraintSetup[Index]) return false;
+			UPhysicsConstraintTemplate* Template = Asset->ConstraintSetup[Index];
+			FConstraintInstance& Constraint = Template->DefaultInstance;
+			Constraint.SetAngularTwistLimit(ACM_Limited, Limit.Twist);
+			Constraint.SetAngularSwing1Limit(ACM_Limited, Limit.Swing1);
+			Constraint.SetAngularSwing2Limit(ACM_Limited, Limit.Swing2);
+			Template->SetDefaultProfile(Constraint);
+		}
+		return HasApprovedLimits(Asset);
+	}
+
+	struct FElbowTargetResult
+	{
+		FName Child;
+		float SignedDegrees = 0;
+		FQuat TargetQuat = FQuat::Identity;
+		FVector JointPosition = FVector::ZeroVector;
+		FVector WristBefore = FVector::ZeroVector;
+		FVector WristAfter = FVector::ZeroVector;
+		FVector WorldTwistAxis = FVector::ZeroVector;
+		float PreservedForceLimit = 0;
+	};
+
+	bool ConfigureOneElbow(UPhysicsAsset* Asset, const USkeletalMesh* Mesh, const TArray<FTransform>& Component, FName ChildName, FName ParentName, FName WristName, FElbowTargetResult& Out)
+	{
+		const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+		const int32 ChildBone = Ref.FindBoneIndex(ChildName), WristBone = Ref.FindBoneIndex(WristName);
+		const int32 ConstraintIndex = FindConstraint(Asset, ChildName, ParentName);
+		if (ConstraintIndex == INDEX_NONE || ChildBone == INDEX_NONE || WristBone == INDEX_NONE || !Component.IsValidIndex(ChildBone) || !Component.IsValidIndex(WristBone)) return false;
+		UPhysicsConstraintTemplate* Template = Asset->ConstraintSetup[ConstraintIndex];
+		FConstraintInstance& Constraint = Template->DefaultInstance;
+		const FTransform JointFrame = Constraint.GetRefFrame(EConstraintFrame::Frame1) * Component[ChildBone];
+		const FVector Joint = JointFrame.GetLocation();
+		const FVector Wrist = Component[WristBone].GetLocation();
+		const FVector Lever = Wrist - Joint;
+		const FVector Axis = JointFrame.GetUnitAxis(EAxis::X).GetSafeNormal();
+		if (Lever.IsNearlyZero() || Axis.IsNearlyZero()) return false;
+
+		const float Angle = 15.0f;
+		const FQuat PlusWorld(Axis, FMath::DegreesToRadians(Angle));
+		const FQuat MinusWorld(Axis, FMath::DegreesToRadians(-Angle));
+		const FVector PlusWrist = Joint + PlusWorld.RotateVector(Lever);
+		const FVector MinusWrist = Joint + MinusWorld.RotateVector(Lever);
+		const bool UsePlus = PlusWrist.Z < MinusWrist.Z;
+		const float SignedDegrees = UsePlus ? Angle : -Angle;
+		const FVector DesiredWrist = UsePlus ? PlusWrist : MinusWrist;
+		if (!(DesiredWrist.Z < Wrist.Z - 0.1f) || FMath::Abs(SignedDegrees) >= 55.0f) return false;
+
+		FConstraintProfileProperties& Profile = Constraint.ProfileInstance;
+		Out.PreservedForceLimit = Profile.AngularDrive.TwistDrive.MaxForce;
+		Profile.AngularDrive.AngularDriveMode = EAngularDriveMode::TwistAndSwing;
+		Profile.AngularDrive.bAccelerationMode = true;
+		Profile.AngularDrive.OrientationTarget = FQuat(FVector::XAxisVector, FMath::DegreesToRadians(SignedDegrees)).Rotator();
+		Profile.AngularDrive.AngularVelocityTarget = FVector::ZeroVector;
+		Profile.AngularDrive.TwistDrive.bEnablePositionDrive = true;
+		Profile.AngularDrive.TwistDrive.bEnableVelocityDrive = false;
+		Profile.AngularDrive.TwistDrive.Stiffness = 5.0f;
+		Profile.AngularDrive.TwistDrive.Damping = 1.0f;
+		Profile.AngularDrive.SwingDrive.bEnablePositionDrive = false;
+		Profile.AngularDrive.SwingDrive.bEnableVelocityDrive = false;
+		Profile.AngularDrive.SlerpDrive.bEnablePositionDrive = false;
+		Profile.AngularDrive.SlerpDrive.bEnableVelocityDrive = false;
+		Template->SetDefaultProfile(Constraint);
+
+		Out.Child = ChildName;
+		Out.SignedDegrees = SignedDegrees;
+		Out.TargetQuat = FQuat(Profile.AngularDrive.OrientationTarget);
+		Out.JointPosition = Joint;
+		Out.WristBefore = Wrist;
+		Out.WristAfter = DesiredWrist;
+		Out.WorldTwistAxis = Axis;
+		return Out.TargetQuat.IsNormalized() && !Out.WristAfter.ContainsNaN();
+	}
+
+	bool ValidateElbowRelaxedCandidate(const UPhysicsAsset* Candidate, const UPhysicsAsset* Source, const USkeletalMesh* Mesh, const FElbowTargetResult& Left, const FElbowTargetResult& Right)
+	{
+		if (!Candidate || !Source || !Mesh || Candidate->SkeletalBodySetups.Num() != 12 || Candidate->ConstraintSetup.Num() != 11 || !HasApprovedLimits(Candidate)) return false;
+		if (!FMath::IsNearlyEqual(Left.WristAfter.Z, Right.WristAfter.Z, 0.01f) || !FMath::IsNearlyEqual(Left.WristAfter.X, -Right.WristAfter.X, 0.01f) || !FMath::IsNearlyEqual(Left.WristAfter.Y, Right.WristAfter.Y, 0.01f)) return false;
+		for (const TObjectPtr<USkeletalBodySetup>& CandidateBody : Candidate->SkeletalBodySetups)
+		{
+			const int32 SourceIndex = Source->FindBodyIndex(CandidateBody->BoneName);
+			if (SourceIndex == INDEX_NONE) return false;
+			const USkeletalBodySetup* SourceBody = Source->SkeletalBodySetups[SourceIndex];
+			if (!SameGeometry(CandidateBody->AggGeom, SourceBody->AggGeom) || !FBodyInstance::StaticStruct()->CompareScriptStruct(&CandidateBody->DefaultInstance, &SourceBody->DefaultInstance, 0)) return false;
+		}
+		for (const TObjectPtr<UPhysicsConstraintTemplate>& CandidateTemplate : Candidate->ConstraintSetup)
+		{
+			if (!CandidateTemplate) return false;
+			const FConstraintInstance& CandidateConstraint = CandidateTemplate->DefaultInstance;
+			const int32 SourceIndex = FindConstraint(Source, CandidateConstraint.ConstraintBone1, CandidateConstraint.ConstraintBone2);
+			if (SourceIndex == INDEX_NONE || !Source->ConstraintSetup[SourceIndex]) return false;
+			const FConstraintInstance& SourceConstraint = Source->ConstraintSetup[SourceIndex]->DefaultInstance;
+
+			FConstraintInstance CandidateOutsideProfile = CandidateConstraint;
+			CandidateOutsideProfile.ProfileInstance = SourceConstraint.ProfileInstance;
+			if (!FConstraintInstance::StaticStruct()->CompareScriptStruct(&CandidateOutsideProfile, &SourceConstraint, 0)) return false;
+
+			FConstraintProfileProperties CandidateProfile = CandidateConstraint.ProfileInstance;
+			FConstraintProfileProperties SourceProfile = SourceConstraint.ProfileInstance;
+			if (IsElbowConstraint(CandidateConstraint)) CandidateProfile.AngularDrive = SourceProfile.AngularDrive;
+			if (!FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&CandidateProfile, &SourceProfile, 0)) return false;
+			if (!FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&CandidateTemplate->GetConstraintProfilePropertiesOrDefault(NAME_None), &CandidateConstraint.ProfileInstance, 0)) return false;
+
+			const FAngularDriveConstraint& Drive = CandidateConstraint.ProfileInstance.AngularDrive;
+			if (IsElbowConstraint(CandidateConstraint))
+			{
+				if (Drive.AngularDriveMode != EAngularDriveMode::TwistAndSwing || !Drive.bAccelerationMode || !Drive.TwistDrive.bEnablePositionDrive || Drive.TwistDrive.bEnableVelocityDrive || Drive.SwingDrive.bEnablePositionDrive || Drive.SwingDrive.bEnableVelocityDrive || Drive.SlerpDrive.bEnablePositionDrive || Drive.SlerpDrive.bEnableVelocityDrive || !FMath::IsNearlyEqual(Drive.TwistDrive.Stiffness, 5.0f) || !FMath::IsNearlyEqual(Drive.TwistDrive.Damping, 1.0f)) return false;
+				if (!FMath::IsNearlyEqual(Drive.TwistDrive.MaxForce, SourceConstraint.ProfileInstance.AngularDrive.TwistDrive.MaxForce)) return false;
+			}
+			else if (Drive.IsOrientationDriveEnabled() || Drive.IsVelocityDriveEnabled()) return false;
+		}
+		return true;
+	}
+
+	void DisableAllAngularDriveFlags(FConstraintInstance& Constraint)
+	{
+		FAngularDriveConstraint& Drive = Constraint.ProfileInstance.AngularDrive;
+		Drive.TwistDrive.bEnablePositionDrive = false;
+		Drive.TwistDrive.bEnableVelocityDrive = false;
+		Drive.SwingDrive.bEnablePositionDrive = false;
+		Drive.SwingDrive.bEnableVelocityDrive = false;
+		Drive.SlerpDrive.bEnablePositionDrive = false;
+		Drive.SlerpDrive.bEnableVelocityDrive = false;
+	}
+
+	bool ValidateTunedPassive(const UPhysicsAsset* Candidate, const UPhysicsAsset* Source)
+	{
+		if (!Candidate || !Source || Candidate->SkeletalBodySetups.Num() != 12 || Candidate->ConstraintSetup.Num() != 11 || !HasApprovedLimits(Candidate)) return false;
+		for (const TObjectPtr<USkeletalBodySetup>& CandidateBody : Candidate->SkeletalBodySetups)
+		{
+			const int32 SourceIndex = Source->FindBodyIndex(CandidateBody->BoneName);
+			if (SourceIndex == INDEX_NONE || !SameGeometry(CandidateBody->AggGeom, Source->SkeletalBodySetups[SourceIndex]->AggGeom) ||
+				!FBodyInstance::StaticStruct()->CompareScriptStruct(&CandidateBody->DefaultInstance, &Source->SkeletalBodySetups[SourceIndex]->DefaultInstance, 0)) return false;
+		}
+		for (const TObjectPtr<UPhysicsConstraintTemplate>& CandidateTemplate : Candidate->ConstraintSetup)
+		{
+			if (!CandidateTemplate) return false;
+			const FConstraintInstance& CandidateConstraint = CandidateTemplate->DefaultInstance;
+			const int32 SourceIndex = FindConstraint(Source, CandidateConstraint.ConstraintBone1, CandidateConstraint.ConstraintBone2);
+			if (SourceIndex == INDEX_NONE || !Source->ConstraintSetup[SourceIndex]) return false;
+			FConstraintInstance Expected = Source->ConstraintSetup[SourceIndex]->DefaultInstance;
+			DisableAllAngularDriveFlags(Expected);
+			if (!FConstraintInstance::StaticStruct()->CompareScriptStruct(&CandidateConstraint, &Expected, 0)) return false;
+			if (CandidateConstraint.ProfileInstance.AngularDrive.IsOrientationDriveEnabled() || CandidateConstraint.ProfileInstance.AngularDrive.IsVelocityDriveEnabled()) return false;
+			if (!FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&CandidateTemplate->GetConstraintProfilePropertiesOrDefault(NAME_None), &CandidateConstraint.ProfileInstance, 0)) return false;
+		}
+		return true;
+	}
+
+	bool SameSerializedPropertiesExcept(const UObject* A, const UObject* B, const TSet<FName>& Excluded)
+	{
+		if (!A || !B || A->GetClass() != B->GetClass()) return false;
+		for (TFieldIterator<FProperty> It(A->GetClass(), EFieldIteratorFlags::IncludeSuper); It; ++It)
+		{
+			const FProperty* Property = *It;
+			if (Excluded.Contains(Property->GetFName()) || Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient)) continue;
+			if (!Property->Identical_InContainer(A, B, 0))
+			{
+				UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX property mismatch: %s.%s"), *A->GetName(), *Property->GetName());
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ValidateRuntimeFixedPassive(const UPhysicsAsset* Candidate, const UPhysicsAsset* Source, const USkeletalMesh* Mesh)
+	{
+		if (!Candidate || !Source || !Mesh || Candidate->SkeletalBodySetups.Num() != 12 || Candidate->ConstraintSetup.Num() != 11 || !HasApprovedLimits(Candidate)) return false;
+		const TSet<FName> AssetExcluded = { GET_MEMBER_NAME_CHECKED(UPhysicsAsset, SkeletalBodySetups), GET_MEMBER_NAME_CHECKED(UPhysicsAsset, ConstraintSetup) };
+		if (!SameSerializedPropertiesExcept(Candidate, Source, AssetExcluded)) return false;
+		const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+		for (const TObjectPtr<USkeletalBodySetup>& CandidateBody : Candidate->SkeletalBodySetups)
+		{
+			if (!CandidateBody || CandidateBody->PhysicsType != PhysType_Default || Ref.FindBoneIndex(CandidateBody->BoneName) == INDEX_NONE) return false;
+			const int32 SourceIndex = Source->FindBodyIndex(CandidateBody->BoneName);
+			if (SourceIndex == INDEX_NONE || !Source->SkeletalBodySetups[SourceIndex]) return false;
+			const USkeletalBodySetup* SourceBody = Source->SkeletalBodySetups[SourceIndex];
+			const TSet<FName> BodyExcluded = { GET_MEMBER_NAME_CHECKED(UBodySetupCore, PhysicsType) };
+			if (!SameSerializedPropertiesExcept(CandidateBody, SourceBody, BodyExcluded)) return false;
+		}
+		for (const TObjectPtr<UPhysicsConstraintTemplate>& CandidateTemplate : Candidate->ConstraintSetup)
+		{
+			if (!CandidateTemplate) return false;
+			const FConstraintInstance& CandidateConstraint = CandidateTemplate->DefaultInstance;
+			const int32 SourceIndex = FindConstraint(Source, CandidateConstraint.ConstraintBone1, CandidateConstraint.ConstraintBone2);
+			if (SourceIndex == INDEX_NONE || !Source->ConstraintSetup[SourceIndex]) return false;
+			if (!FConstraintInstance::StaticStruct()->CompareScriptStruct(&CandidateConstraint, &Source->ConstraintSetup[SourceIndex]->DefaultInstance, 0)) return false;
+			if (CandidateConstraint.ProfileInstance.AngularDrive.IsOrientationDriveEnabled() || CandidateConstraint.ProfileInstance.AngularDrive.IsVelocityDriveEnabled()) return false;
+			if (!FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&CandidateTemplate->GetConstraintProfilePropertiesOrDefault(NAME_None), &CandidateConstraint.ProfileInstance, 0)) return false;
+		}
+		return true;
 	}
 
 	bool BuildAndValidate9Body(UPhysicsAsset* Working, const UPhysicsAsset* Baseline, const USkeletalMesh* Mesh)
@@ -676,10 +935,15 @@ void FJurassicPhysicsRefitModule::StartupModule()
 	AnalyzeMassBalanceCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AnalyzeMassBalance"),TEXT("Read-only calculated/runtime mass and target-distribution diagnostic."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AnalyzeMassBalance));
 	ValidateMassBalanceCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.ValidateMassBalance"),TEXT("Validate serialized mass-only candidate and runtime distribution."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::ValidateMassBalance));
 	AuditConstraintsCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AuditConstraints"),TEXT("Read-only component-space constraint-frame and settings audit."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AuditConstraints));
+	CreateElbowRelaxedDriveCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.CreateElbowRelaxedDrive"),TEXT("Create and validate the elbow-only relaxed-drive Physics Asset candidate."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::CreateElbowRelaxedDrive));
+	CreateTunedPassiveCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.CreateTunedPassive"),TEXT("Create and validate the passive tuned Physics Asset baseline."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::CreateTunedPassive));
+	AuditTunedPassiveCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AuditTunedPassive"),TEXT("Read-only fresh-load audit of the passive tuned Physics Asset baseline."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AuditTunedPassive));
+	CreateRuntimeFixedPassiveCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.CreateRuntimeFixedPassive"),TEXT("Create the runtime-fixed tuned passive Physics Asset."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::CreateRuntimeFixedPassive));
+	AuditRuntimeFixedPassiveCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.AuditRuntimeFixedPassive"),TEXT("Fresh serialized-load audit of the runtime-fixed Physics Asset."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::AuditRuntimeFixedPassive));
 	CleanupCommand=MakeUnique<FAutoConsoleCommand>(TEXT("JurassicPhysicsRefit.Cleanup"),TEXT("Delete the experimental destination through the editor asset subsystem."),FConsoleCommandDelegate::CreateRaw(this,&FJurassicPhysicsRefitModule::Cleanup));
 }
 
-void FJurassicPhysicsRefitModule::ShutdownModule() { CleanupCommand.Reset(); AuditConstraintsCommand.Reset(); ValidateMassBalanceCommand.Reset(); AnalyzeMassBalanceCommand.Reset(); PlanTorsoRefitCommand.Reset(); AnalyzeTorsoCommand.Reset(); PlanHipsRefitCommand.Reset(); AnalyzeHipsCommand.Reset(); Create12BodyLowerLegFitCommand.Reset(); Create9BodyCommand.Reset(); ExecuteCommand.Reset(); AnalyzeCommand.Reset(); }
+void FJurassicPhysicsRefitModule::ShutdownModule() { CleanupCommand.Reset(); AuditRuntimeFixedPassiveCommand.Reset(); CreateRuntimeFixedPassiveCommand.Reset(); AuditTunedPassiveCommand.Reset(); CreateTunedPassiveCommand.Reset(); CreateElbowRelaxedDriveCommand.Reset(); AuditConstraintsCommand.Reset(); ValidateMassBalanceCommand.Reset(); AnalyzeMassBalanceCommand.Reset(); PlanTorsoRefitCommand.Reset(); AnalyzeTorsoCommand.Reset(); PlanHipsRefitCommand.Reset(); AnalyzeHipsCommand.Reset(); Create12BodyLowerLegFitCommand.Reset(); Create9BodyCommand.Reset(); ExecuteCommand.Reset(); AnalyzeCommand.Reset(); }
 
 void FJurassicPhysicsRefitModule::Analyze()
 {
@@ -786,6 +1050,130 @@ void FJurassicPhysicsRefitModule::AuditConstraints()
 	using namespace JurassicPhysicsRefit;
 	UPhysicsAsset* Asset=LoadObject<UPhysicsAsset>(nullptr,MassBalanceObjectPath); USkeletalMesh* Mesh=LoadObject<USkeletalMesh>(nullptr,MeshPath);
 	if(!AuditAllConstraints(Asset,Mesh)) UE_LOG(LogTemp,Error,TEXT("JurassicPhysicsRefit JOINT AUDIT FAIL: invalid structure, transform, or dirty-state change."));
+}
+
+void FJurassicPhysicsRefitModule::CreateElbowRelaxedDrive()
+{
+	using namespace JurassicPhysicsRefit;
+	if (FindObject<UObject>(nullptr, ElbowRelaxedObjectPath) || FPackageName::DoesPackageExist(ElbowRelaxedPackage)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: destination exists; stopped without overwrite.")); return; }
+	UPhysicsAsset* Source = LoadObject<UPhysicsAsset>(nullptr, HipConstraintObjectPath);
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, MeshPath);
+	if (!Source || !Mesh || Source->SkeletalBodySetups.Num() != 12 || Source->ConstraintSetup.Num() != 11) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: source preflight failed.")); return; }
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Source->ConstraintSetup) if (!Template || Template->DefaultInstance.ProfileInstance.AngularDrive.IsOrientationDriveEnabled() || Template->DefaultInstance.ProfileInstance.AngularDrive.IsVelocityDriveEnabled()) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: source contains an enabled angular drive; stopped.")); return; }
+	UPhysicsAsset* ApprovedReference = DuplicateObject<UPhysicsAsset>(Source, GetTransientPackage(), TEXT("PA_Monster_ElbowRelaxedApprovedReference"));
+	if (!ApprovedReference || !RestoreApprovedLimitsAndSyncProfiles(ApprovedReference)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: could not construct the transient approved-limit reference.")); return; }
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit ELBOW DRIVE: source limits read and approved 11-joint table restored only in transient/candidate copies; source remains unchanged."));
+
+	UPhysicsAsset* Working = DuplicateObject<UPhysicsAsset>(Source, GetTransientPackage(), TEXT("PA_Monster_ElbowRelaxedDriveWorking"));
+	const TArray<FTransform> Component = ComponentRefTransforms(Mesh);
+	FElbowTargetResult Left, Right;
+	if (!Working || !RestoreApprovedLimitsAndSyncProfiles(Working) ||
+		!ConfigureOneElbow(Working, Mesh, Component, TEXT("lowerarm_l"), TEXT("upperarm_l"), TEXT("wrist_l"), Left) ||
+		!ConfigureOneElbow(Working, Mesh, Component, TEXT("lowerarm_r"), TEXT("upperarm_r"), TEXT("wrist_r"), Right) ||
+		!ValidateElbowRelaxedCandidate(Working, ApprovedReference, Mesh, Left, Right)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: transient validation failed; no asset created.")); return; }
+
+	UPackage* Package = CreatePackage(ElbowRelaxedPackage);
+	UPhysicsAsset* Result = DuplicateObject<UPhysicsAsset>(Working, Package, ElbowRelaxedName);
+	if (!Result || !RestoreApprovedLimitsAndSyncProfiles(Result) || !ValidateElbowRelaxedCandidate(Result, ApprovedReference, Mesh, Left, Right)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: packaged-object validation failed; no asset saved.")); return; }
+	Result->SetFlags(RF_Public | RF_Standalone);
+	FAssetRegistryModule::AssetCreated(Result);
+	Result->MarkPackageDirty();
+	FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+	const FString Filename = FPackageName::LongPackageNameToFilename(ElbowRelaxedPackage, FPackageName::GetAssetPackageExtension());
+	if (!UPackage::SavePackage(Package, Result, *Filename, Args)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: save failed.")); return; }
+	if (!ValidateElbowRelaxedCandidate(Result, ApprovedReference, Mesh, Left, Right) || Result->GetOutermost()->IsDirty()) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit ELBOW DRIVE: post-save readback failed.")); return; }
+
+	for (const FElbowTargetResult& E : {Left, Right}) UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit ELBOW TARGET child=%s signedTwistDeg=%.3f quat=(X=%.9f Y=%.9f Z=%.9f W=%.9f) rotator=%s worldAxis=%s jointCm=%s wristBeforeCm=%s wristAfterCm=%s downwardDeltaCm=%.6f preservedForceLimit=%.6f"), *E.Child.ToString(), E.SignedDegrees, E.TargetQuat.X, E.TargetQuat.Y, E.TargetQuat.Z, E.TargetQuat.W, *E.TargetQuat.Rotator().ToString(), *E.WorldTwistAxis.ToString(), *E.JointPosition.ToString(), *E.WristBefore.ToString(), *E.WristAfter.ToString(), E.WristAfter.Z - E.WristBefore.Z, E.PreservedForceLimit);
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Result->ConstraintSetup) { const FConstraintInstance& C = Template->DefaultInstance; const FAngularDriveConstraint& D = C.ProfileInstance.AngularDrive; const bool IsSynced = FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&Template->GetConstraintProfilePropertiesOrDefault(NAME_None), &C.ProfileInstance, 0); UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit ELBOW READBACK %s->%s limits[T=%.3f S1=%.3f S2=%.3f] mode=%d accel=%s target=%s targetVel=%s twist[pos=%s vel=%s k=%.3f d=%.3f force=%.3f] swing[pos=%s vel=%s] slerp[pos=%s vel=%s] profileSynced=%s"), *C.ConstraintBone1.ToString(), *C.ConstraintBone2.ToString(), C.ProfileInstance.TwistLimit.TwistLimitDegrees, C.ProfileInstance.ConeLimit.Swing1LimitDegrees, C.ProfileInstance.ConeLimit.Swing2LimitDegrees, (int32)D.AngularDriveMode, D.bAccelerationMode ? TEXT("true") : TEXT("false"), *D.OrientationTarget.ToString(), *D.AngularVelocityTarget.ToString(), D.TwistDrive.bEnablePositionDrive ? TEXT("true") : TEXT("false"), D.TwistDrive.bEnableVelocityDrive ? TEXT("true") : TEXT("false"), D.TwistDrive.Stiffness, D.TwistDrive.Damping, D.TwistDrive.MaxForce, D.SwingDrive.bEnablePositionDrive ? TEXT("true") : TEXT("false"), D.SwingDrive.bEnableVelocityDrive ? TEXT("true") : TEXT("false"), D.SlerpDrive.bEnablePositionDrive ? TEXT("true") : TEXT("false"), D.SlerpDrive.bEnableVelocityDrive ? TEXT("true") : TEXT("false"), IsSynced ? TEXT("true") : TEXT("false")); }
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit ELBOW DRIVE PASS: saved %s bodies=12 constraints=11 sourceUnchanged=true meshAssigned=%s"), ElbowRelaxedPackage, Mesh->GetPhysicsAsset() == Result ? TEXT("true") : TEXT("false"));
+}
+
+void FJurassicPhysicsRefitModule::CreateTunedPassive()
+{
+	using namespace JurassicPhysicsRefit;
+	if (FindObject<UObject>(nullptr, TunedPassiveObjectPath) || FPackageName::DoesPackageExist(TunedPassivePackage)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: destination exists; stopped without overwrite.")); return; }
+	UPhysicsAsset* Source = LoadObject<UPhysicsAsset>(nullptr, ElbowRelaxedObjectPath);
+	if (!Source || Source->SkeletalBodySetups.Num() != 12 || Source->ConstraintSetup.Num() != 11 || !HasApprovedLimits(Source)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: source preflight failed.")); return; }
+	UPhysicsAsset* Working = DuplicateObject<UPhysicsAsset>(Source, GetTransientPackage(), TEXT("PA_Monster_TunedPassiveWorking"));
+	if (!Working) return;
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Working->ConstraintSetup)
+	{
+		if (!Template) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: null constraint template.")); return; }
+		DisableAllAngularDriveFlags(Template->DefaultInstance);
+		Template->SetDefaultProfile(Template->DefaultInstance);
+	}
+	if (!ValidateTunedPassive(Working, Source)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: transient validation failed; no asset created.")); return; }
+	UPackage* Package = CreatePackage(TunedPassivePackage);
+	UPhysicsAsset* Result = DuplicateObject<UPhysicsAsset>(Working, Package, TunedPassiveName);
+	if (!Result) return;
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Result->ConstraintSetup) { DisableAllAngularDriveFlags(Template->DefaultInstance); Template->SetDefaultProfile(Template->DefaultInstance); }
+	if (!ValidateTunedPassive(Result, Source)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: packaged-object validation failed; no asset saved.")); return; }
+	Result->SetFlags(RF_Public | RF_Standalone); FAssetRegistryModule::AssetCreated(Result); Result->MarkPackageDirty();
+	FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+	const FString Filename = FPackageName::LongPackageNameToFilename(TunedPassivePackage, FPackageName::GetAssetPackageExtension());
+	if (!UPackage::SavePackage(Package, Result, *Filename, Args) || !ValidateTunedPassive(Result, Source) || Result->GetOutermost()->IsDirty()) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE: post-save validation failed.")); return; }
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Result->ConstraintSetup)
+	{
+		const FConstraintInstance& C = Template->DefaultInstance; const FAngularDriveConstraint& D = C.ProfileInstance.AngularDrive;
+		const bool Synced = FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&Template->GetConstraintProfilePropertiesOrDefault(NAME_None), &C.ProfileInstance, 0);
+		UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit PASSIVE READBACK %s->%s limits[T=%.3f S1=%.3f S2=%.3f] driveMode=%d target=%s twist[pos=%s vel=%s k=%.3f d=%.3f force=%.3f] swing[pos=%s vel=%s] slerp[pos=%s vel=%s] profileSynced=%s"), *C.ConstraintBone1.ToString(), *C.ConstraintBone2.ToString(), C.ProfileInstance.TwistLimit.TwistLimitDegrees, C.ProfileInstance.ConeLimit.Swing1LimitDegrees, C.ProfileInstance.ConeLimit.Swing2LimitDegrees, (int32)D.AngularDriveMode, *D.OrientationTarget.ToString(), D.TwistDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.TwistDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), D.TwistDrive.Stiffness, D.TwistDrive.Damping, D.TwistDrive.MaxForce, D.SwingDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.SwingDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), D.SlerpDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.SlerpDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), Synced?TEXT("true"):TEXT("false"));
+	}
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit PASSIVE PASS: saved %s bodies=12 constraints=11 onlyDriveEnableFlagsDiffer=true"), TunedPassivePackage);
+}
+
+void FJurassicPhysicsRefitModule::AuditTunedPassive()
+{
+	using namespace JurassicPhysicsRefit;
+	UPhysicsAsset* Source = LoadObject<UPhysicsAsset>(nullptr, ElbowRelaxedObjectPath);
+	UPhysicsAsset* Candidate = LoadObject<UPhysicsAsset>(nullptr, TunedPassiveObjectPath);
+	if (!ValidateTunedPassive(Candidate, Source)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit PASSIVE FRESH AUDIT FAIL.")); return; }
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Candidate->ConstraintSetup)
+	{
+		const FConstraintInstance& C = Template->DefaultInstance; const FAngularDriveConstraint& D = C.ProfileInstance.AngularDrive;
+		const bool Synced = FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&Template->GetConstraintProfilePropertiesOrDefault(NAME_None), &C.ProfileInstance, 0);
+		UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit PASSIVE FRESH %s->%s limits[T=%.3f S1=%.3f S2=%.3f] twistPos=%s twistVel=%s swingPos=%s swingVel=%s slerpPos=%s slerpVel=%s profileSynced=%s"), *C.ConstraintBone1.ToString(), *C.ConstraintBone2.ToString(), C.ProfileInstance.TwistLimit.TwistLimitDegrees, C.ProfileInstance.ConeLimit.Swing1LimitDegrees, C.ProfileInstance.ConeLimit.Swing2LimitDegrees, D.TwistDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.TwistDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), D.SwingDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.SwingDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), D.SlerpDrive.bEnablePositionDrive?TEXT("true"):TEXT("false"), D.SlerpDrive.bEnableVelocityDrive?TEXT("true"):TEXT("false"), Synced?TEXT("true"):TEXT("false"));
+	}
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit PASSIVE FRESH AUDIT PASS: disk-loaded candidate matches source except disabled angular-drive enable flags; geometryMassFramesExact=true."));
+}
+
+void FJurassicPhysicsRefitModule::CreateRuntimeFixedPassive()
+{
+	using namespace JurassicPhysicsRefit;
+	if (FindObject<UObject>(nullptr, RuntimeFixedObjectPath) || FPackageName::DoesPackageExist(RuntimeFixedPackage)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX: destination exists; stopped without overwrite.")); return; }
+	UPhysicsAsset* Source = LoadObject<UPhysicsAsset>(nullptr, TunedPassiveObjectPath);
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, MeshPath);
+	if (!Source || !Mesh || Source->SkeletalBodySetups.Num() != 12 || Source->ConstraintSetup.Num() != 11 || !HasApprovedLimits(Source)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX: source preflight failed.")); return; }
+	UPhysicsAsset* Working = DuplicateObject<UPhysicsAsset>(Source, GetTransientPackage(), TEXT("PA_Monster_TunedPassive_RuntimeFixedWorking"));
+	if (!Working) return;
+	for (const TObjectPtr<USkeletalBodySetup>& Body : Working->SkeletalBodySetups) { if (!Body) return; Body->PhysicsType = PhysType_Default; }
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Working->ConstraintSetup) { if (!Template) return; Template->SetDefaultProfile(Template->DefaultInstance); }
+	if (!ValidateRuntimeFixedPassive(Working, Source, Mesh)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX: transient validation failed; no asset created.")); return; }
+
+	UPackage* Package = CreatePackage(RuntimeFixedPackage);
+	UPhysicsAsset* Result = DuplicateObject<UPhysicsAsset>(Working, Package, RuntimeFixedName);
+	if (!Result) return;
+	for (const TObjectPtr<USkeletalBodySetup>& Body : Result->SkeletalBodySetups) Body->PhysicsType = PhysType_Default;
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Result->ConstraintSetup) Template->SetDefaultProfile(Template->DefaultInstance);
+	if (!ValidateRuntimeFixedPassive(Result, Source, Mesh)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX: packaged-object validation failed; no asset saved.")); return; }
+	Result->SetFlags(RF_Public | RF_Standalone); FAssetRegistryModule::AssetCreated(Result); Result->MarkPackageDirty();
+	FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+	const FString Filename = FPackageName::LongPackageNameToFilename(RuntimeFixedPackage, FPackageName::GetAssetPackageExtension());
+	if (!UPackage::SavePackage(Package, Result, *Filename, Args) || !ValidateRuntimeFixedPassive(Result, Source, Mesh) || Result->GetOutermost()->IsDirty()) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX: post-save validation failed.")); return; }
+	for (const TObjectPtr<USkeletalBodySetup>& Body : Result->SkeletalBodySetups) UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit RUNTIME FIX BODY %s physicsType=%s collisionResponse=%d massScale=%.9g"), *Body->BoneName.ToString(), LexToString((EPhysicsType)Body->PhysicsType.GetValue()), (int32)Body->CollisionReponse.GetValue(), Body->DefaultInstance.MassScale);
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Result->ConstraintSetup) { const FConstraintInstance& C=Template->DefaultInstance; const FAngularDriveConstraint& D=C.ProfileInstance.AngularDrive; const bool Synced=FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&Template->GetConstraintProfilePropertiesOrDefault(NAME_None),&C.ProfileInstance,0); UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit RUNTIME FIX CONSTRAINT %s->%s T=%.3f S1=%.3f S2=%.3f motions=%d/%d/%d drives=%s/%s profileSynced=%s"),*C.ConstraintBone1.ToString(),*C.ConstraintBone2.ToString(),C.ProfileInstance.TwistLimit.TwistLimitDegrees,C.ProfileInstance.ConeLimit.Swing1LimitDegrees,C.ProfileInstance.ConeLimit.Swing2LimitDegrees,(int32)C.ProfileInstance.TwistLimit.TwistMotion,(int32)C.ProfileInstance.ConeLimit.Swing1Motion,(int32)C.ProfileInstance.ConeLimit.Swing2Motion,D.IsOrientationDriveEnabled()?TEXT("on"):TEXT("off"),D.IsVelocityDriveEnabled()?TEXT("on"):TEXT("off"),Synced?TEXT("true"):TEXT("false")); }
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit RUNTIME FIX PASS: saved %s bodies=12 constraints=11 onlyPhysicsTypeChanged=true"), RuntimeFixedPackage);
+}
+
+void FJurassicPhysicsRefitModule::AuditRuntimeFixedPassive()
+{
+	using namespace JurassicPhysicsRefit;
+	UPhysicsAsset* Source = LoadObject<UPhysicsAsset>(nullptr, TunedPassiveObjectPath);
+	UPhysicsAsset* Candidate = LoadObject<UPhysicsAsset>(nullptr, RuntimeFixedObjectPath);
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, MeshPath);
+	if (!ValidateRuntimeFixedPassive(Candidate, Source, Mesh)) { UE_LOG(LogTemp, Error, TEXT("JurassicPhysicsRefit RUNTIME FIX FRESH AUDIT FAIL.")); return; }
+	for (const TObjectPtr<USkeletalBodySetup>& Body : Candidate->SkeletalBodySetups) UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit RUNTIME FIX FRESH BODY %s physicsType=%s collisionResponse=%d massScale=%.9g"), *Body->BoneName.ToString(), LexToString((EPhysicsType)Body->PhysicsType.GetValue()), (int32)Body->CollisionReponse.GetValue(), Body->DefaultInstance.MassScale);
+	for (const TObjectPtr<UPhysicsConstraintTemplate>& Template : Candidate->ConstraintSetup) { const FConstraintInstance& C=Template->DefaultInstance; const FAngularDriveConstraint& D=C.ProfileInstance.AngularDrive; const bool Synced=FConstraintProfileProperties::StaticStruct()->CompareScriptStruct(&Template->GetConstraintProfilePropertiesOrDefault(NAME_None),&C.ProfileInstance,0); UE_LOG(LogTemp,Display,TEXT("JurassicPhysicsRefit RUNTIME FIX FRESH CONSTRAINT %s->%s T=%.3f S1=%.3f S2=%.3f motions=%d/%d/%d drives=%s/%s profileSynced=%s"),*C.ConstraintBone1.ToString(),*C.ConstraintBone2.ToString(),C.ProfileInstance.TwistLimit.TwistLimitDegrees,C.ProfileInstance.ConeLimit.Swing1LimitDegrees,C.ProfileInstance.ConeLimit.Swing2LimitDegrees,(int32)C.ProfileInstance.TwistLimit.TwistMotion,(int32)C.ProfileInstance.ConeLimit.Swing1Motion,(int32)C.ProfileInstance.ConeLimit.Swing2Motion,D.IsOrientationDriveEnabled()?TEXT("on"):TEXT("off"),D.IsVelocityDriveEnabled()?TEXT("on"):TEXT("off"),Synced?TEXT("true"):TEXT("false")); }
+	UE_LOG(LogTemp, Display, TEXT("JurassicPhysicsRefit RUNTIME FIX FRESH AUDIT PASS: only PhysicsType differs; all serialized body, asset, collision-disable, constraint and profile data match source."));
 }
 
 void FJurassicPhysicsRefitModule::Cleanup()
