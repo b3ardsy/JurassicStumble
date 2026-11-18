@@ -37,12 +37,7 @@ public class JurassicPhysicsRefit : ModuleRules
 				"CoreUObject",
 				"Engine",
 				"UnrealEd",
-				"AssetRegistry",
-				"PhysicsCore",
-				"PhysicsUtilities",
-				"MeshUtilitiesCommon",
-				"MeshUtilitiesEngine"
-				,"GeometryCore"
+				"PhysicsCore"
 			}
 			);
 		
