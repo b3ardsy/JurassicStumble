@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "JurassicPhysicsRefit",
+	"Description": "Editor-only deterministic physics asset refit utility for Jurassic Tumble.",
+	"Category": "Other",
+	"CreatedBy": "",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"Modules": [
+		{
+			"Name": "JurassicPhysicsRefit",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false
+}
